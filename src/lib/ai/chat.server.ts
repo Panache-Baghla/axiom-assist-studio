@@ -91,7 +91,12 @@ export async function handleChat(request: Request) {
 export async function handleCorrect(request: Request) {
   const apiKey = process.env.LOVABLE_API_KEY;
   const token = request.headers.get("authorization")?.replace("Bearer ", "");
-  if (!apiKey || !token) return json({ error: "Please sign in." }, 401);
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY;
+  if (!apiKey || !token || !url || !key) return json({ error: "Please sign in." }, 401);
+  const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await sb.auth.getClaims(token);
+  if (error || !data?.claims?.sub) return json({ error: "Please sign in." }, 401);
   const { text } = (await request.json()) as { text: string };
   const provider = createOpenAI({
     baseURL: "https://ai.gateway.lovable.dev/v1",
