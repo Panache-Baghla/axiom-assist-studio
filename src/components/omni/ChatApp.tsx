@@ -56,8 +56,8 @@ function speak(text: string, onEnd?: () => void) {
 }
 
 export function ChatApp({ user }: { user: User }) {
-  const name = (user.user_metadata?.full_name as string) || (user.user_metadata?.name as string) || user.email?.split("@")[0] || "there";
-  const firstName = name.split(" ")[0];
+  const name = (user.user_metadata?.["full_name"] as string) || (user.user_metadata?.["name"] as string) || user.email?.split("@")[0] || "there";
+  const firstName = name.split(" ")[0] ?? name;
 
   const [convs, setConvs] = useState<Conv[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -215,7 +215,7 @@ export function ChatApp({ user }: { user: User }) {
   async function deletePair(id: string) {
     const i = messages.findIndex((m) => m.id === id);
     const ids = [id];
-    if (messages[i + 1]?.role === "assistant") ids.push(messages[i + 1].id);
+    const nx = messages[i + 1]; if (nx?.role === "assistant") ids.push(nx.id);
     setMessages((ms) => ms.filter((m) => !ids.includes(m.id)));
     if (activeId) await supabase.from("messages").delete().in("id", ids);
   }
@@ -246,7 +246,7 @@ export function ChatApp({ user }: { user: User }) {
     const slice = messages.slice(0, i + 1);
     const title = "Branch · " + (convs.find((c) => c.id === activeId)?.title ?? slice[0]?.content.slice(0, 40) ?? "chat");
     const { data, error } = await supabase.from("conversations").insert({ user_id: user.id, title: title.slice(0, 70) }).select("id").single();
-    if (error) return toast.error("Couldn't branch chat");
+    if (error) { toast.error("Couldn't branch chat"); return; }
     await supabase.from("messages").insert(slice.map((m) => ({ conversation_id: data.id, user_id: user.id, role: m.role, content: m.content })));
     await loadConvs();
     await openConv(data.id);
@@ -271,7 +271,7 @@ export function ChatApp({ user }: { user: User }) {
 
   function dictate() {
     const r = getRecognition();
-    if (!r) return toast.error("Voice typing isn't supported in this browser.");
+    if (!r) { toast.error("Voice typing isn't supported in this browser."); return; }
     const base = input;
     setListening(true);
     r.onresult = (e: any) => {
@@ -339,7 +339,7 @@ export function ChatApp({ user }: { user: User }) {
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={() => togglePin(c)}>{c.pinned ? <PinOff /> : <Pin />}{c.pinned ? "Unpin" : "Pin"}</DropdownMenuItem>
           <DropdownMenuItem onClick={() => setRenaming({ id: c.id, title: c.title })}><Pencil />Rename</DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onClick={() => removeConv(c.id)}><Trash2 />Delete</DropdownMenuItem>
+          <DropdownMenuItem className="text-destructive" onClick={() => removeConv(c.id)}><Trash2 />Delete</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
