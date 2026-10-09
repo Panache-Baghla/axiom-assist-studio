@@ -5,7 +5,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Check, Copy, Play } from "lucide-react";
 
-function CodeBlock({ lang, code, onPreview }: { lang: string; code: string; onPreview?: (html: string) => void }) {
+function CodeBlock({ lang, code, onPreview }: { lang: string; code: string; onPreview?: ((html: string) => void) | undefined }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="my-3 overflow-hidden rounded-xl border bg-sidebar">
@@ -34,7 +34,7 @@ function CodeBlock({ lang, code, onPreview }: { lang: string; code: string; onPr
   );
 }
 
-export const Markdown = memo(function Markdown({ text, onPreview }: { text: string; onPreview?: (html: string) => void }) {
+export const Markdown = memo(function Markdown({ text, onPreview }: { text: string; onPreview?: ((html: string) => void) | undefined }) {
   return (
     <div className="prose-omni">
       <ReactMarkdown

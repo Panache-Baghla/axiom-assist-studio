@@ -37,14 +37,14 @@ const EFFORT: Record<ChatMode, "low" | "medium" | "high"> = {
 
 export async function handleChat(request: Request) {
   const token = request.headers.get("authorization")?.replace("Bearer ", "");
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_PUBLISHABLE_KEY;
+  const url = process.env['SUPABASE_URL'];
+  const key = process.env['SUPABASE_PUBLISHABLE_KEY'];
   if (!token || !url || !key) return json({ error: "Please sign in." }, 401);
   const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   const { data, error } = await sb.auth.getClaims(token);
   if (error || !data?.claims?.sub) return json({ error: "Please sign in." }, 401);
 
-  const apiKey = process.env.LOVABLE_API_KEY;
+  const apiKey = process.env['LOVABLE_API_KEY'];
   if (!apiKey) return json({ error: "AI is not configured." }, 500);
 
   const body = (await request.json()) as {
@@ -89,10 +89,10 @@ export async function handleChat(request: Request) {
 }
 
 export async function handleCorrect(request: Request) {
-  const apiKey = process.env.LOVABLE_API_KEY;
+  const apiKey = process.env['LOVABLE_API_KEY'];
   const token = request.headers.get("authorization")?.replace("Bearer ", "");
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_PUBLISHABLE_KEY;
+  const url = process.env['SUPABASE_URL'];
+  const key = process.env['SUPABASE_PUBLISHABLE_KEY'];
   if (!apiKey || !token || !url || !key) return json({ error: "Please sign in." }, 401);
   const sb = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   const { data, error } = await sb.auth.getClaims(token);
