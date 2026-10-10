@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import {
   ArrowUp, Brain, Check, Code2, Copy, FolderKanban, GitBranch, Ghost, Globe, ImagePlus, LogOut,
   Menu, Mic, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Plus, Search, Sigma, Sparkle, Square,
-  ThumbsDown, ThumbsUp, Trash2, Volume2, Wand2, X, Zap, AudioLines, ChevronDown, VolumeX,
+  ThumbsDown, ThumbsUp, Trash2, Volume2, Wand2, X, Zap, AudioLines, ChevronDown, VolumeX, FileDown, Settings2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -19,17 +19,18 @@ import { OmniLogo } from "./OmniLogo";
 import { Markdown } from "./Markdown";
 import { greetingFor } from "@/lib/greeting";
 
-type Mode = "instant" | "think" | "reasoning" | "build";
+type Mode = "instant" | "think" | "reasoning" | "build" | "web" | "generate";
+type Project = { id: string; name: string; instructions: string };
 type Msg = { id: string; role: "user" | "assistant"; content: string; feedback?: number | null; persisted?: boolean };
-type Conv = { id: string; title: string; pinned: boolean; updated_at: string };
+type Conv = { id: string; title: string; pinned: boolean; updated_at: string; project_id: string | null };
 
-const MODES: { id: Mode | "generate" | "web"; label: string; desc: string; icon: typeof Zap; soon?: boolean }[] = [
+const MODES: { id: Mode; label: string; desc: string; icon: typeof Zap; soon?: boolean }[] = [
   { id: "instant", label: "Instant reply", desc: "Fast, concise answers", icon: Zap },
   { id: "think", label: "Think deep", desc: "Careful, thorough thinking", icon: Brain },
   { id: "reasoning", label: "Reasoning & Math", desc: "Rigorous step-by-step", icon: Sigma },
   { id: "build", label: "Build", desc: "Create websites and apps", icon: Code2 },
-  { id: "generate", label: "Generate", desc: "Images — coming soon", icon: ImagePlus, soon: true },
-  { id: "web", label: "Web search", desc: "Live web — coming soon", icon: Globe, soon: true },
+  { id: "generate", label: "Generate", desc: "Create images from text", icon: ImagePlus },
+  { id: "web", label: "Web search", desc: "Latest info with sources", icon: Globe },
 ];
 
 const uid = () => crypto.randomUUID();
@@ -55,6 +56,22 @@ function speak(text: string, onEnd?: () => void) {
   speechSynthesis.speak(u);
 }
 
+function exportPdf(title: string, html: string) {
+  const w = window.open("", "_blank");
+  if (!w) { toast.error("Please allow pop-ups to download the PDF."); return; }
+  const esc = title.replace(/[<>&]/g, "");
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<style>body{font-family:Georgia,serif;max-width:760px;margin:40px auto;padding:0 24px;color:#111;line-height:1.6}
+h1.t{font-family:system-ui,sans-serif;font-size:22px;border-bottom:2px solid #3b82f6;padding-bottom:8px}
+.role{font-family:system-ui,sans-serif;font-size:12px;text-transform:uppercase;color:#3b82f6;margin-top:28px;letter-spacing:.08em}
+pre{background:#f4f4f5;padding:12px;border-radius:8px;white-space:pre-wrap;font-size:12px}button{display:none}
+img{max-width:100%;border-radius:12px}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px 10px}
+@media print{a{color:#111}}</style></head><body><h1 class="t">${esc}</h1>${html}
+<script>window.onload=()=>setTimeout(()=>window.print(),600)<\/script></body></html>`);
+  w.document.close();
+}
+
 export function ChatApp({ user }: { user: User }) {
   const name = (user.user_metadata?.["full_name"] as string) || (user.user_metadata?.["name"] as string) || user.email?.split("@")[0] || "there";
   const firstName = name.split(" ")[0] ?? name;
@@ -77,6 +94,9 @@ export function ChatApp({ user }: { user: User }) {
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceState, setVoiceState] = useState<"listening" | "thinking" | "speaking" | "idle">("idle");
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProject, setActiveProject] = useState<string | null>(null);
+  const [projectEdit, setProjectEdit] = useState<{ id?: string; name: string; instructions: string } | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -85,12 +105,17 @@ export function ChatApp({ user }: { user: User }) {
   const greeting = useMemo(() => greetingFor(new Date().getHours()), []);
 
   const loadConvs = useCallback(async () => {
-    const { data } = await supabase.from("conversations").select("id,title,pinned,updated_at").order("updated_at", { ascending: false });
+    const { data } = await supabase.from("conversations").select("id,title,pinned,updated_at,project_id").order("updated_at", { ascending: false });
     setConvs((data as Conv[]) ?? []);
+  }, []);
+  const loadProjects = useCallback(async () => {
+    const { data } = await supabase.from("projects").select("id,name,instructions").order("created_at");
+    setProjects((data as Project[]) ?? []);
   }, []);
 
   useEffect(() => {
     loadConvs();
+    loadProjects();
     if (typeof window !== "undefined" && window.innerWidth < 768) setSidebarOpen(false);
   }, [loadConvs]);
 
@@ -102,6 +127,7 @@ export function ChatApp({ user }: { user: User }) {
     abortRef.current?.abort();
     setTemporary(false);
     setActiveId(id);
+    setActiveProject(convs.find((c) => c.id === id)?.project_id ?? activeProject);
     const { data } = await supabase.from("messages").select("id,role,content,feedback").eq("conversation_id", id).order("created_at");
     setMessages(((data as Msg[]) ?? []).map((m) => ({ ...m, persisted: true })));
     if (window.innerWidth < 768) setSidebarOpen(false);
@@ -119,7 +145,7 @@ export function ChatApp({ user }: { user: User }) {
     if (temporary) return null;
     if (activeId) return activeId;
     const title = firstPrompt.replace(/\s+/g, " ").slice(0, 60) || "New chat";
-    const { data, error } = await supabase.from("conversations").insert({ user_id: user.id, title }).select("id").single();
+    const { data, error } = await supabase.from("conversations").insert({ user_id: user.id, title, project_id: activeProject }).select("id").single();
     if (error) { toast.error("Couldn't save chat"); return null; }
     setActiveId(data.id);
     loadConvs();
@@ -144,7 +170,7 @@ export function ChatApp({ user }: { user: User }) {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${data.session?.access_token}` },
-        body: JSON.stringify({ mode, userName: firstName, messages: history.map(({ role, content }) => ({ role, content })) }),
+        body: JSON.stringify({ mode, userName: firstName, projectInstructions: projects.find((p) => p.id === activeProject)?.instructions, messages: history.map(({ role, content }) => ({ role, content })) }),
         signal: ac.signal,
       });
       if (!res.ok || !res.body) {
@@ -195,11 +221,21 @@ export function ChatApp({ user }: { user: User }) {
     if (autoCorrect && text) text = await correctText(text);
     let content = text;
     for (const f of files) {
-      if (f.type.startsWith("text/") || /\.(md|json|csv|js|ts|tsx|py|html|css|java|c|cpp|txt|xml|yml|yaml|sql)$/i.test(f.name)) {
+      const isImg = f.type.startsWith("image/");
+      const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+      if (isImg || isPdf) {
+        const path = `${user.id}/${uid()}-${f.name.replace(/[^\w.-]/g, "_")}`;
+        const up = await supabase.storage.from("omni-files").upload(path, f, { contentType: f.type || "application/pdf" });
+        const signed = up.error ? null : await supabase.storage.from("omni-files").createSignedUrl(path, 60 * 60 * 24 * 365 * 10);
+        const link = signed?.data?.signedUrl;
+        if (!link) { toast.error(`Couldn't upload ${f.name}`); continue; }
+        const label = f.name.replace(/[[\]]/g, "");
+        content += isImg ? `\n\n![${label}](${link})` : `\n\n[📄 ${label}](${link})`;
+      } else if (f.type.startsWith("text/") || /\.(md|json|csv|js|ts|tsx|py|html|css|java|c|cpp|txt|xml|yml|yaml|sql)$/i.test(f.name)) {
         const body = (await f.text()).slice(0, 60000);
         content += `\n\n**Attached file: ${f.name}**\n\`\`\`\n${body}\n\`\`\``;
       } else {
-        content += `\n\n_(Attached: ${f.name} — this file type can't be read yet)_`;
+        content += `\n\n_(Attached: ${f.name} — videos and this file type can't be read yet)_`;
       }
     }
     setInput("");
@@ -269,6 +305,31 @@ export function ChatApp({ user }: { user: User }) {
     loadConvs();
   }
 
+  async function saveProject() {
+    if (!projectEdit?.name.trim()) return;
+    const row = { name: projectEdit.name.trim(), instructions: projectEdit.instructions };
+    if (projectEdit.id) await supabase.from("projects").update(row).eq("id", projectEdit.id);
+    else {
+      const { data } = await supabase.from("projects").insert({ ...row, user_id: user.id }).select("id").single();
+      if (data) { setActiveProject(data.id); newChat(); }
+    }
+    setProjectEdit(null);
+    loadProjects();
+  }
+  async function deleteProject(id: string) {
+    await supabase.from("projects").delete().eq("id", id);
+    if (activeProject === id) setActiveProject(null);
+    loadProjects(); loadConvs();
+  }
+  function exportMsg(id: string) {
+    const el = document.getElementById(`msg-${id}`);
+    if (el) exportPdf("OmniAI reply", el.innerHTML);
+  }
+  function exportChat() {
+    const html = messages.map((m) => `<div class="role">${m.role === "user" ? firstName : "OmniAI"}</div>${document.getElementById(`msg-${m.id}`)?.innerHTML ?? ""}`).join("");
+    exportPdf(convs.find((c) => c.id === activeId)?.title ?? "OmniAI chat", html);
+  }
+
   function dictate() {
     const r = getRecognition();
     if (!r) { toast.error("Voice typing isn't supported in this browser."); return; }
@@ -323,7 +384,7 @@ export function ChatApp({ user }: { user: User }) {
     speak(m.content, () => setSpeakingId(null));
   }
 
-  const filtered = convs.filter((c) => c.title.toLowerCase().includes(search.toLowerCase()));
+  const filtered = convs.filter((c) => (!activeProject || c.project_id === activeProject) && c.title.toLowerCase().includes(search.toLowerCase()));
   const pinned = filtered.filter((c) => c.pinned);
   const recent = filtered.filter((c) => !c.pinned);
   const currentMode = MODES.find((m) => m.id === mode)!;
@@ -356,7 +417,22 @@ export function ChatApp({ user }: { user: User }) {
         <div className="space-y-1 px-3">
           <button onClick={() => newChat()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-sidebar-accent"><Plus className="size-4" /> New chat</button>
           <button onClick={() => newChat(true)} className={cn("flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-sidebar-accent", temporary && "bg-sidebar-accent")}><Ghost className="size-4" /> Temporary chat</button>
-          <button onClick={() => toast("Projects are coming soon")} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-sidebar-accent"><FolderKanban className="size-4" /> Projects <span className="ml-auto text-[10px] uppercase text-muted-foreground">soon</span></button>
+          <div className="flex items-center gap-2 px-3 pb-1 pt-2 text-xs text-muted-foreground"><FolderKanban className="size-3.5" /> Projects
+            <button onClick={() => setProjectEdit({ name: "", instructions: "" })} className="ml-auto rounded p-0.5 hover:bg-sidebar-accent hover:text-foreground" aria-label="New project"><Plus className="size-3.5" /></button>
+          </div>
+          {projects.map((p) => (
+            <div key={p.id} className={cn("group flex items-center rounded-lg pr-1 text-sm hover:bg-sidebar-accent", activeProject === p.id && "bg-sidebar-accent")}>
+              <button onClick={() => { setActiveProject(activeProject === p.id ? null : p.id); newChat(); }} className="flex flex-1 items-center gap-2 truncate px-3 py-1.5 text-left"><span className="size-2 rounded-full bg-aurora" />{p.name}</button>
+              <DropdownMenu>
+                <DropdownMenuTrigger className="rounded-md p-1 opacity-0 hover:bg-accent group-hover:opacity-100" aria-label="Project options"><MoreHorizontal className="size-4" /></DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setProjectEdit(p)}><Settings2 />Edit project</DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={() => deleteProject(p.id)}><Trash2 />Delete</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ))}
+          {projects.length === 0 && <p className="px-3 text-xs text-muted-foreground">Group chats with shared instructions</p>}
           <div className="relative pt-2">
             <Search className="absolute left-3 top-1/2 mt-1 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search chats" className="h-9 rounded-lg border-transparent bg-sidebar-accent pl-9" />
@@ -364,7 +440,7 @@ export function ChatApp({ user }: { user: User }) {
         </div>
         <div className="mt-3 flex-1 overflow-y-auto px-3 pb-3">
           {pinned.length > 0 && (<><p className="px-3 pb-1 pt-3 text-xs text-muted-foreground">Pinned</p>{pinned.map((c) => <ConvRow key={c.id} c={c} />)}</>)}
-          <p className="px-3 pb-1 pt-3 text-xs text-muted-foreground">Recent</p>
+          <p className="px-3 pb-1 pt-3 text-xs text-muted-foreground">{activeProject ? `In ${projects.find((p) => p.id === activeProject)?.name ?? "project"}` : "Recent"}</p>
           {recent.map((c) => <ConvRow key={c.id} c={c} />)}
           {recent.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">{search ? "No matches" : "No chats yet"}</p>}
         </div>
@@ -382,6 +458,7 @@ export function ChatApp({ user }: { user: User }) {
           <span className="text-sm font-medium">OmniAI</span>
           {temporary && <span className="flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs text-muted-foreground"><Ghost className="size-3" /> Temporary — not saved</span>}
           <div className="ml-auto flex items-center gap-2">
+            {!empty && <button onClick={exportChat} className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm hover:bg-accent"><FileDown className="size-4" /> PDF</button>}
             <button onClick={openVoice} className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm hover:bg-accent"><AudioLines className="size-4" /> Voice</button>
           </div>
         </header>
@@ -408,7 +485,7 @@ export function ChatApp({ user }: { user: User }) {
                       </div>
                     </div>
                   ) : (
-                    <div className="max-w-[85%] whitespace-pre-wrap rounded-3xl bg-bubble px-5 py-3 text-bubble-foreground">{m.content}</div>
+                    <div id={`msg-${m.id}`} className="max-w-[85%] rounded-3xl bg-bubble px-5 py-3 text-bubble-foreground [&_img]:max-h-64 [&_img]:rounded-xl"><Markdown text={m.content} /></div>
                   )}
                   {editing?.id !== m.id && (
                     <div className="mt-1 flex gap-0.5 opacity-0 transition group-hover:opacity-100">
@@ -422,13 +499,14 @@ export function ChatApp({ user }: { user: User }) {
                 <div key={m.id} className="group flex gap-4">
                   <OmniLogo className={cn("mt-0.5 size-7 shrink-0", streaming && idx === messages.length - 1 && "animate-orb")} />
                   <div className="min-w-0 flex-1">
-                    {m.content ? <Markdown text={m.content} onPreview={setPreview} /> : <ThinkingDots mode={mode} />}
+                    {m.content ? <div id={`msg-${m.id}`} className="[&_img]:rounded-2xl"><Markdown text={m.content} onPreview={setPreview} /></div> : <ThinkingDots mode={mode} />}
                     {m.content && !(streaming && idx === messages.length - 1) && (
                       <div className="mt-2 flex gap-0.5">
                         <IconBtn label="Copy reply" onClick={() => { navigator.clipboard.writeText(m.content); toast.success("Copied"); }}><Copy /></IconBtn>
                         <IconBtn label="Read aloud" onClick={() => readAloud(m)}>{speakingId === m.id ? <VolumeX /> : <Volume2 />}</IconBtn>
                         <IconBtn label="Good reply" active={m.feedback === 1} onClick={() => feedback(m.id, 1)}><ThumbsUp /></IconBtn>
                         <IconBtn label="Bad reply" active={m.feedback === -1} onClick={() => feedback(m.id, -1)}><ThumbsDown /></IconBtn>
+                        <IconBtn label="Download as PDF" onClick={() => exportMsg(m.id)}><FileDown /></IconBtn>
                         {!temporary && <IconBtn label="Branch to new chat" onClick={() => branch(m.id)}><GitBranch /></IconBtn>}
                       </div>
                     )}
@@ -457,12 +535,12 @@ export function ChatApp({ user }: { user: User }) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder={mode === "build" ? "Describe the website or app to build…" : "Ask OmniAI anything…"}
+                placeholder={mode === "build" ? "Describe the website or app to build…" : mode === "generate" ? "Describe the image to create…" : mode === "web" ? "Search the web for anything…" : "Ask OmniAI anything…"}
                 rows={1}
                 className="max-h-52 min-h-12 resize-none border-0 bg-transparent px-3 text-base shadow-none focus-visible:ring-0 dark:bg-transparent"
               />
               <div className="flex items-center gap-1 px-1">
-                <input ref={fileRef} type="file" multiple hidden onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = ""; }} />
+                <input ref={fileRef} type="file" multiple accept="image/*,application/pdf,.txt,.md,.json,.csv,.js,.ts,.tsx,.py,.html,.css,.java,.c,.cpp,.xml,.yml,.yaml,.sql" hidden onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = ""; }} />
                 <IconBtn label="Attach files" big onClick={() => fileRef.current?.click()}><Paperclip /></IconBtn>
                 <Popover>
                   <PopoverTrigger asChild>
@@ -511,6 +589,16 @@ export function ChatApp({ user }: { user: User }) {
         </DialogContent>
       </Dialog>
 
+      {/* Project */}
+      <Dialog open={!!projectEdit} onOpenChange={(o) => !o && setProjectEdit(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{projectEdit?.id ? "Edit project" : "New project"}</DialogTitle></DialogHeader>
+          <Input placeholder="Project name" value={projectEdit?.name ?? ""} onChange={(e) => projectEdit && setProjectEdit({ ...projectEdit, name: e.target.value })} autoFocus />
+          <Textarea placeholder="Instructions OmniAI should follow in this project (optional)" value={projectEdit?.instructions ?? ""} onChange={(e) => projectEdit && setProjectEdit({ ...projectEdit, instructions: e.target.value })} className="min-h-28" />
+          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setProjectEdit(null)}>Cancel</Button><Button onClick={saveProject}>Save</Button></div>
+        </DialogContent>
+      </Dialog>
+
       {/* App preview */}
       <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)}>
         <DialogContent className="h-[90vh] max-w-[95vw] gap-0 p-0 sm:max-w-6xl">
@@ -546,7 +634,7 @@ function IconBtn({ children, label, onClick, active, big }: { children: React.Re
 function ThinkingDots({ mode }: { mode: Mode }) {
   return (
     <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
-      <span className="text-aurora font-medium">{mode === "instant" ? "Answering" : mode === "build" ? "Building" : "Thinking"}</span>
+      <span className="text-aurora font-medium">{mode === "instant" ? "Answering" : mode === "build" ? "Building" : mode === "generate" ? "Creating image" : mode === "web" ? "Searching the web" : "Thinking"}</span>
       <span className="flex gap-1">{[0, 1, 2].map((i) => <span key={i} className="size-1.5 animate-pulse rounded-full bg-muted-foreground" style={{ animationDelay: `${i * 150}ms` }} />)}</span>
     </div>
   );
