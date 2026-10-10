@@ -143,11 +143,26 @@ export async function handleChat(request: Request) {
   });
 
   const enc = new TextEncoder();
+  const it = result.fullStream[Symbol.asyncIterator]();
+  let first: IteratorResult<(typeof result.fullStream) extends AsyncIterable<infer P> ? P : never>;
+  try {
+    first = await it.next();
+    while (!first.done && first.value.type !== "text-delta" && first.value.type !== "error" && first.value.type !== "source") first = await it.next();
+    if (!first.done && first.value.type === "error") throw first.value.error;
+  } catch (e) {
+    const status = (e as { statusCode?: number }).statusCode ?? 500;
+    const msg = status === 402 ? "AI credits are used up. Please add credits to continue." : status === 429 ? "Too many requests — please wait a moment." : "Something went wrong. Please try again.";
+    return json({ error: msg }, status);
+  }
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const sources = new Map<string, string>();
       try {
-        for await (const part of result.fullStream) {
+        const rest = { [Symbol.asyncIterator]: () => it };
+        const all = first.done ? [] : [first.value];
+        for await (const part of [...all, ...[]].concat()) handle(part);
+        for await (const part of rest) handle(part);
+        function handle(part: (typeof all)[number]) {
           if (part.type === "text-delta") controller.enqueue(enc.encode(part.text));
           else if (part.type === "source" && part.sourceType === "url") sources.set(part.url, part.title || part.url);
           else if (part.type === "error") throw part.error;
