@@ -8,3 +8,5 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Chat attachments and generated images live in the private `omni-files` storage bucket under `<userId>/`, referenced in message markdown by long-lived signed URLs; the chat server turns user-message image/PDF links into model media parts. Why: the workspace blocks public buckets and messages stay plain text.
