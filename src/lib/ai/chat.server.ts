@@ -142,9 +142,10 @@ export async function handleChat(request: Request) {
     },
   });
 
+  type Part = typeof result.fullStream extends AsyncIterable<infer P> ? P : never;
   const enc = new TextEncoder();
   const it = result.fullStream[Symbol.asyncIterator]();
-  let first: IteratorResult<(typeof result.fullStream) extends AsyncIterable<infer P> ? P : never>;
+  let first: IteratorResult<Part>;
   try {
     first = await it.next();
     while (!first.done && first.value.type !== "text-delta" && first.value.type !== "error" && first.value.type !== "source") first = await it.next();
@@ -157,16 +158,14 @@ export async function handleChat(request: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const sources = new Map<string, string>();
+      const handle = (part: Part) => {
+        if (part.type === "text-delta") controller.enqueue(enc.encode(part.text));
+        else if (part.type === "source" && part.sourceType === "url") sources.set(part.url, part.title || part.url);
+        else if (part.type === "error") throw part.error;
+      };
       try {
-        const rest = { [Symbol.asyncIterator]: () => it };
-        const all = first.done ? [] : [first.value];
-        for await (const part of [...all, ...[]].concat()) handle(part);
-        for await (const part of rest) handle(part);
-        function handle(part: (typeof all)[number]) {
-          if (part.type === "text-delta") controller.enqueue(enc.encode(part.text));
-          else if (part.type === "source" && part.sourceType === "url") sources.set(part.url, part.title || part.url);
-          else if (part.type === "error") throw part.error;
-        }
+        if (!first.done) handle(first.value);
+        for (let n = await it.next(); !n.done; n = await it.next()) handle(n.value);
         if (sources.size) {
           const list = [...sources].slice(0, 8).map(([u, t], i) => `${i + 1}. [${t.replace(/[[\]]/g, "")}](${u})`).join("\n");
           controller.enqueue(enc.encode(`\n\n---\n**Sources**\n${list}`));
